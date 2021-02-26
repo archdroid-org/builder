@@ -303,10 +303,13 @@ sync_repo(){
       if [ "$action" = "??" ]; then
         git add "$file"
         git commit -m "Added $file"
+
+        # a push per file
+        git push -f origin
       fi
     done
 
-    # finally push all changes
+    # push any pending changes
     git push -f origin
 
     cd ..
