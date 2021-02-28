@@ -699,8 +699,16 @@ pkgbuild_get_packages(){
 pkgbuild_build_if_needed(){
   local ARCH=$(uname -m)
 
+  # Remove package directory if PKGBUILD doesn't exists
   if [ ! -e "packages/$1/PKGBUILD" ]; then
-    rm -vf "$ARCH"/"$1"*".pkg.tar."*
+    if [ -e "packages/$1/current_packages" ]; then
+      local package=""
+      for package in $(cat packages/$1/current_packages); do
+        rm -vf "$ARCH"/"$package"*".pkg.tar."*
+      done
+    else
+      rm -vf "$ARCH"/"$1"*".pkg.tar."*
+    fi
     rm -rf "packages/$1"
     echo "Package removed from repository."
     return 3
