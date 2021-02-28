@@ -623,118 +623,7 @@ repo_usage(){
   fi
 }
 
-if [ ! -e "packages" ]; then
-  echo "You must run the setup to initialize the PKGBUILDs repository."
-  echo -n "Do you want to run the setup now? [y/n]: "
-  read run_setup
-  if [ "$run_setup" = "y" ]; then
-    setup_repo
-    echo "Setup complete!"
-    exit 0
-  else
-    exit 1
-  fi
-fi
-
-
-case $1 in
-  'config-get' )
-    shift
-    config_get $@
-    exit
-    ;;
-  'config-set' )
-    shift
-    config_write $@
-    exit
-    ;;
-  'setup' )
-    setup_repo
-    exit
-    ;;
-  'setupgh' )
-    setup_gh_repo
-    exit
-    ;;
-  'setupghr' )
-    setup_gh_release_repo
-    exit
-    ;;
-  'setupweb' )
-    setup_webserver_repo
-    exit
-    ;;
-  'clean' )
-    clean_repo
-    exit
-    ;;
-  'addpkgs' )
-    add_packages
-    sync_repo
-    exit
-    ;;
-  'repodef' )
-    repo_usage
-    exit
-    ;;
-  'build' )
-    echo "Started on: $(date)"
-    sudo pacman -Suy --noconfirm
-    echo "Starting build process..."
-    ;;
-  * )
-    echo "Helper script to maintain an archlinux repo."
-    echo ""
-    echo "COMMANDS"
-    echo "  setup       initialize the system for building"
-    echo "  setupgh     (re)configure a github repository mirror"
-    echo "  setupghr    (re)configure a github repository for releases as mirror"
-    echo "  setupweb    (re)configure a webserver as mirror"
-    echo "  config-get  Gets the value of an option on the config.ini"
-    echo "              Params: <option-name>"
-    echo "  config-get  Set the value of an option on the config.ini"
-    echo "              Params: <option-name> <option-value>"
-    echo "  clean       remove all packages"
-    echo "  build       build outdated or missing packages and sync to server."
-    echo "  addpkgs     generate repo databases and upload sync to server"
-    echo "  repodef     view pacman.conf repo sample definition"
-    echo "  help        print this help"
-    exit
-    ;;
-esac
-
-
-ARCH=$(uname -m)
-PACKAGES_BUILT=()
-REPONAME=$(config_get reponame)
-
-if [ ! -e "$ARCH" ]; then
-  mkdir "$ARCH"
-fi
-
-#
-# Update PKGBUILDs repository
-#
-cd packages
-git checkout master
-git restore .
-git pull
-cd ..
-
-#
-# Make a list of packages to build
-#
-if [ -e "skip" ]; then
-  packages=(
-    $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2 | grep -v -f skip)
-  )
-else
-  packages=(
-    $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2)
-  )
-fi
-
-get_packages(){
+pkgbuild_get_packages(){
   if [ ! -e "packages/$1/PKGBUILD" ]; then
     echo "$1"
     return 1
@@ -807,7 +696,9 @@ get_packages(){
   cd ../../
 }
 
-build_if_needed(){
+pkgbuild_build_if_needed(){
+  local ARCH=$(uname -m)
+
   if [ ! -e "packages/$1/PKGBUILD" ]; then
     rm -vf "$ARCH"/"$1"*".pkg.tar."*
     rm -rf "packages/$1"
@@ -815,15 +706,36 @@ build_if_needed(){
     return 3
   fi
 
-  found=$(ls "$ARCH" | grep "$2-$ARCH.pkg.tar.*")
+  # We replace package versions of type:
+  # {epoch}:{version} to {epoch}.{version} to prevent issues
+  # with some hosters not supporting the : character.
+  local pkg=$(echo $2 | sed "s/:/\./g")
+
+  found=$(ls "$ARCH" | grep -F "$pkg-$ARCH.pkg.tar.")
   if [ "$found" = "" ]; then
-    echo "Building $2..."
+    echo "Building $pkg..."
     cd packages/"$1"
 
     makepkg -s --noconfirm --clean --cleanbuild > build.log 2>&1
     make_status=$?
     if [ $make_status -eq 0 ]; then
-      rm -vf ../../"$ARCH"/"$1"*".pkg.tar."*
+      if [ -e "current_packages" ]; then
+        local package=""
+        for package in $(cat current_packages); do
+          rm -vf ../../"$ARCH"/"$package"*".pkg.tar."*
+        done
+      else
+        rm -vf ../../"$ARCH"/"$1"*".pkg.tar."*
+      fi
+
+      local file=""
+      for file in $(ls *.pkg.tar.*); do
+        if echo $file | grep ":" > /dev/null ; then
+          local file_new=$(echo $file | sed "s/:/\./g")
+          mv "$file" "$file_new"
+        fi
+      done
+
       cp *.pkg.tar.* ../../"$ARCH"/
       rm *.pkg.tar.*
     else
@@ -838,30 +750,229 @@ build_if_needed(){
       return 1
     fi
   else
-    echo "$2 already built..."
+    echo "$pkg already built..."
     return 2
   fi
 }
 
-#
-# Build packages not already built or outdated
-#
-for package in "${packages[@]}"; do
-  names=$(get_packages "$package")
-  for name in "$names"; do
-    build_if_needed "$package" "$name"
+pkgbuild_build(){
+  local built=0
+  local names="$(pkgbuild_get_packages "$1")"
+  local name=""
+  for name in $(echo $names | xargs); do
+    pkgbuild_build_if_needed "$1" "$name"
     if [ $? -eq 1 ]; then
-      PACKAGES_BUILT+=("$package")
+      built=1
+    fi
+    break
+  done
+  if [ $built -gt 0 ]; then
+    local names_no_colon=$(echo $names | sed "s/:/\./g")
+    echo $names_no_colon > packages/$1/current_packages
+  fi
+}
+
+build_packages(){
+  local ARCH=$(uname -m)
+  local REPONAME=$(config_get reponame)
+  local PACKAGES_BUILT=()
+
+  echo "Started on: $(date)"
+  sudo pacman -Suy --noconfirm
+  echo "Starting build process..."
+
+  if [ ! -e "$ARCH" ]; then
+    mkdir "$ARCH"
+  fi
+
+  #
+  # Update PKGBUILDs repository
+  #
+  cd packages
+  git checkout $(git branch | sed "s/^\* //g")
+  git restore .
+  git pull
+  cd ..
+
+  #
+  # Make a list of packages to build
+  #
+  local packages=()
+  if [ -e "skip" ]; then
+    packages=(
+      $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2 | grep -v -f skip)
+    )
+  else
+    packages=(
+      $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2)
+    )
+  fi
+
+  #
+  # Build packages not already built or outdated
+  #
+  local package=""
+  for package in "${packages[@]}"; do
+    local built=0
+    local names=$(pkgbuild_get_packages "$package")
+    local name=""
+    for name in $(echo $names | xargs); do
+      pkgbuild_build_if_needed "$package" "$name"
+      if [ $? -eq 1 ]; then
+        PACKAGES_BUILT+=("$package")
+        built=1
+      fi
+      break
+    done
+    if [ $built -gt 0 ]; then
+      local names_no_colon=$(echo $names | sed "s/:/\./g")
+      echo $names_no_colon > packages/$package/current_packages
     fi
   done
-done
 
-#
-# Upload built packages
-#
-if [ ${#PACKAGES_BUILT[@]} -gt 0 ]; then
-  add_packages
-  sync_repo
+  #
+  # Upload built packages
+  #
+  if [ ${#PACKAGES_BUILT[@]} -gt 0 ]; then
+    add_packages
+    sync_repo
+  fi
+
+  echo "Ended on: $(date)"
+}
+
+# This function was written only to run it on older repo with old
+# build script that didn't had support for current_packages
+generate_current_packages(){
+  local ARCH=$(uname -m)
+  local REPONAME=$(config_get reponame)
+  local PACKAGES_BUILT=()
+
+  if [ ! -e "$ARCH" ]; then
+    echo "No packages are currently built no need to run this."
+    return
+  fi
+
+  echo "Generating current_packages file..."
+
+  #
+  # Make a list of packages to build
+  #
+  local packages=()
+  packages=(
+    $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2)
+  )
+
+  #
+  # Generate current_packages file for packages not containing one.
+  #
+  local package=""
+  for package in "${packages[@]}"; do
+    local built=0
+    local names=$(pkgbuild_get_packages "$package")
+    if [ ! -e packages/$package/current_packages ]; then
+      echo $names
+      echo $names > packages/$package/current_packages
+    fi
+  done
+}
+
+#######################################################################
+# Main execution entry point
+#######################################################################
+if [ ! -e "packages" ]; then
+  echo "You must run the setup to initialize the PKGBUILDs repository."
+  echo -n "Do you want to run the setup now? [y/n]: "
+  read run_setup
+  if [ "$run_setup" = "y" ]; then
+    setup_repo
+    echo "Setup complete!"
+    exit 0
+  else
+    exit 1
+  fi
 fi
 
-echo "Ended on: $(date)"
+case $1 in
+  'config-get' )
+    shift
+    config_get $@
+    exit
+    ;;
+  'config-set' )
+    shift
+    config_write $@
+    exit
+    ;;
+  'setup' )
+    setup_repo
+    exit
+    ;;
+  'setupgh' )
+    setup_gh_repo
+    exit
+    ;;
+  'setupghr' )
+    setup_gh_release_repo
+    exit
+    ;;
+  'setupweb' )
+    setup_webserver_repo
+    exit
+    ;;
+  'clean' )
+    clean_repo
+    exit
+    ;;
+  'gencurpkg' )
+    # only used for old repo or troubleshooting
+    generate_current_packages
+    exit
+    ;;
+  'addpkgs' )
+    add_packages
+    sync_repo
+    exit
+    ;;
+  'pkgver' )
+    shift
+    pkgbuild_get_packages $@
+    exit
+    ;;
+  'repodef' )
+    repo_usage
+    exit
+    ;;
+  'build' )
+    build_packages
+    exit
+    ;;
+  'buildpkg' )
+    shift
+    pkgbuild_build $@
+    exit
+    ;;
+  * )
+    echo "Helper script to maintain an archlinux repo."
+    echo ""
+    echo "COMMANDS"
+    echo "  setup       Initialize the system for building."
+    echo "  setupgh     (Re)configure a github repository mirror"
+    echo "  setupghr    (Re)configure a github repository for releases as mirror"
+    echo "  setupweb    (Re)configure a webserver as mirror"
+    echo "  config-get  Gets the value of an option on the config.ini."
+    echo "              Params: <option-name>"
+    echo "  config-get  Set the value of an option on the config.ini."
+    echo "              Params: <option-name> <option-value>"
+    echo "  clean       Remove all packages locally and remotely."
+    echo "  build       Build outdated or missing packages and sync to server."
+    echo "  buildpkg    Build a single package without syncing."
+    echo "              Params: <package-name>"
+    echo "  addpkgs     Generate repo databases and upload sync to server."
+    echo "  pkgver      Get a package names with version."
+    echo "              Params: <package-name>"
+    echo "  repodef     View pacman.conf repo sample definition."
+    echo "  help        Print this help."
+    exit
+    ;;
+esac
