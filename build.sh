@@ -10,9 +10,21 @@ exec 100>running.lock || exit 1
 flock -w 3 100 || exit 1
 trap 'rm -f running.lock' EXIT
 
-if ! which ping > /dev/null 2>&1 ; then
-  echo "The ping command is required to check internet connection."
-  exit 1
+# Check if required dependencies are met.
+deps=(
+    ping repo-add git
+    sshfs rsync jq grep
+    sed awk makepkg file
+)
+
+DEPENDENCIES=()
+for dep in "${deps[@]}"; do
+    command -v ${dep} 1>/dev/null 2>/dev/null || DEPENDENCIES+=("${dep}")
+done
+
+if [ "$DEPENDENCIES" != "" ]; then
+    echo "Please install '${DEPENDENCIES[@]}' to use this script." 1>&2
+    exit 1
 fi
 
 if ! ping -c1 8.8.8.8 > /dev/null 2>&1 ; then
@@ -20,32 +32,37 @@ if ! ping -c1 8.8.8.8 > /dev/null 2>&1 ; then
   exit 1
 fi
 
+# Store option in config.ini
+# @param config_name
+# @param config_value
+config_write(){
+  if [ -e "config.ini" ]; then
+    if grep -q "${1}=" config.ini ; then
+      sed -in "s/^${1}=.*\$/${1}=${2}/g" config.ini
+      return
+    fi
+  fi
 
-if ! which repo-add > /dev/null 2>&1 ; then
-  echo "The pacman repo-add tools is required."
-  exit 1
-fi
+  echo "${1}=${2}" >> config.ini
+}
 
-if ! which git > /dev/null 2>&1 ; then
-  echo "Git is required to use this script."
-  exit 1
-fi
+# Get option from config.ini
+# @param config_name
+# @return value of config_name
+config_get(){
+  if [ -e "config.ini" ]; then
+    grep -E "^${1}=" config.ini | sed "s/${1}=\(.*\)/\1/"
+    return
+  fi
 
-if ! which sshfs > /dev/null 2>&1 ; then
-  echo "SSHFS is required."
-  exit 1
-fi
-
-if ! which rsync > /dev/null 2>&1 ; then
-  echo "rsync is required."
-  exit 1
-fi
+  echo ""
+}
 
 setup_repo(){
   echo "Please enter the repository name that will be used on pacman.conf."
   echo -n "Name: "
   read reponame
-  echo "$reponame" > reponame
+  config_write reponame "$reponame"
 
   if [ ! -e "packages" ]; then
     echo "Enter the url of the git repo containing PKGBUILD scripts."
@@ -54,22 +71,28 @@ setup_repo(){
 
     git clone "$repo_url" packages
 
+    config_write pkgbuilds_repo "$repo_url"
+
     echo "Package build scripts cloned!"
 
     echo "Select the kind of repository where packages are going "
-    echo -n "to be uploaded: (g)it, (w)ebserver or (b)oth [g/w/B]: "
+    echo -n "to be uploaded: (g)it, (r)github release, (w)ebserver or (a)ll [g/r/w/A]: "
 
     read answer
 
     case $answer in
       'g' | 'G' )
-        setup_git_repo
+        setup_gh_repo
+        ;;
+      'r' | 'R' )
+        setup_gh_release_repo
         ;;
       'w' | 'W' )
         setup_webserver_repo
         ;;
       * )
-        setup_git_repo
+        setup_gh_repo
+        setup_gh_release_repo
         setup_webserver_repo
         ::
     esac
@@ -82,17 +105,15 @@ setup_repo(){
 }
 
 setup_webserver_repo(){
-  if [ -e "hostname" ]; then
+  if [ "$(config_get hostname)" != "" ]; then
     echo "A webserver repository is already setup do you want to"
-    echo -n "remove it and set a new repository path? [y/N]: "
+    echo -n "overwrite it and set a new repository path? [y/N]: "
 
     read answer
 
     case $answer in
       'y' | 'Y' )
-        echo "Removing old webserver repository..."
-        rm -f hostname
-        rm -f webserver
+        continue
         ;;
       'n' | 'N' | * )
         return
@@ -103,15 +124,15 @@ setup_webserver_repo(){
   echo "Please enter the ssh hostname:path where packages will be uploaded."
   echo -n "Host: "
   read hostname_path
-  echo "$hostname_path" > hostname
+  config_write hostname "$hostname_path"
 
   echo "Please enter the http web server address."
   echo -n "Address: "
   read address
-  echo "$address" > webserver
+  config_write webserver "$address"
 }
 
-setup_git_repo(){
+setup_gh_repo(){
   if [ -e "git-repo" ]; then
     echo "A git repository is already setup do you want to remove it"
     echo -n "and set a new repository path? [y/N]: "
@@ -142,6 +163,8 @@ setup_git_repo(){
       continue
     fi
 
+    config_write git_repo "$repo_url"
+
     echo "Package build scripts cloned!"
 
     echo "Please enter the username that will appear on commits."
@@ -151,6 +174,9 @@ setup_git_repo(){
     echo "Please enter the e-mail for the username."
     echo -n "E-mail: "
     read email
+
+    config_write git_username "$username"
+    config_write git_email "$email"
 
     cd git-repo
 
@@ -163,6 +189,48 @@ setup_git_repo(){
 
     cloned="1"
   done
+}
+
+setup_gh_release_repo(){
+  if [ "$(config_get gh_release_owner)" != "" ]; then
+    echo "A github release repository is already setup do you want"
+    echo -n " to overwrite it and set a new repository path? [y/N]: "
+
+    read answer
+
+    case $answer in
+      'y' | 'Y' )
+        continue
+        ;;
+      'n' | 'N' | * )
+        return
+        ;;
+    esac
+  fi
+
+  echo "Enter owner of github repository for releases."
+  local answer=""
+  while [ "$answer" = "" ]; do
+    echo -n "Owner: "
+    read answer
+  done
+  config_write gh_release_owner "$answer"
+
+  echo "Enter github repository for releases."
+  local answer=""
+  while [ "$answer" = "" ]; do
+    echo -n "Repo: "
+    read answer
+  done
+  config_write gh_release_repo "$answer"
+
+  echo "Enter the authentication token see (https://github.com/settings/tokens)."
+  local answer=""
+  while [ "$answer" = "" ]; do
+    echo -n "Token: "
+    read answer
+  done
+  config_write gh_release_token "$answer"
 }
 
 clean_repo(){
@@ -205,9 +273,9 @@ clean_repo(){
 
 sync_repo(){
   local ARCH=$(uname -m)
-  local REPONAME=$(cat reponame)
+  local REPONAME=$(config_get reponame)
 
-  if [ -e "hostname"  ]; then
+  if [ "$(config_get hostname)" != "" ]; then
     if [ ! -e "upload" ]; then
       mkdir upload
     else
@@ -215,7 +283,7 @@ sync_repo(){
       mkdir upload
     fi
 
-    sshfs "$(cat hostname)" upload
+    sshfs "$(config_get hostname)" upload
     if [ ! -e "upload/$REPONAME" ]; then
       mkdir -p "upload/$REPONAME/$ARCH"
     fi
@@ -314,11 +382,152 @@ sync_repo(){
 
     cd ..
   fi
+
+  sync_repo_gh_release
+}
+
+sync_repo_gh_release(){
+  local ARCH=$(uname -m)
+  local REPONAME=$(config_get reponame)
+  local gh_token=$(config_get gh_release_token)
+  local gh_owner=$(config_get gh_release_owner)
+  local gh_repo=$(config_get gh_release_repo)
+
+  if [ "$gh_owner" = "" ] || [ "$gh_repo" = "" ] || [ "$gh_token" = "" ]; then
+    return
+  fi
+
+  json_output=$(curl \
+    -H "Authorization: token $gh_token"  \
+    -H "Accept: application/vnd.github.v3+json" \
+    https://api.github.com/repos/$gh_owner/$gh_repo/releases/tags/$ARCH
+  )
+
+  local error=$(printf "%s" "$json_output" | jq -r ".message" 2>/dev/null)
+
+  if [ "$error" != "null" ] && [ "$?" != "0" ]; then
+    echo "Error: $error"
+    return
+  elif [ "$error" = "Bad credentials" ] || [ "$error" != "Not Found" ]; then
+    if [ "$error" != "null" ]; then
+      echo "Error: $error"
+      return
+    fi
+  elif [ "$error" = "Not Found" ]; then
+    json_output=$(curl \
+      -X POST \
+      -H "Authorization: token $gh_token" \
+      -H "Accept: application/vnd.github.v3+json" \
+      https://api.github.com/repos/$gh_owner/$gh_repo/releases \
+      -d '{"tag_name":"'$ARCH'"}'
+    )
+
+    error=$(printf "%s" "$json_output" | jq -r ".message" 2>/dev/null)
+
+    if [ "$error" != "null" ] && [ "$?" != "0" ]; then
+      echo "Error: release could not be created with error:"
+      echo "$error"
+      return
+    fi
+  fi
+
+  local upload_url=$(printf "%s" "$json_output" | jq -r .upload_url)
+  upload_url=$(echo $upload_url | cut -d"{" -f1)
+
+  local files_uploaded=0
+  for file in $(ls $ARCH/*.pkg.* | xargs) ; do
+    local file_size=$(stat --format="%s" "$file")
+    local file_name=$(basename $file)
+
+    if [ $((file_size/1024/1024)) -gt $((2*1024)) ]; then
+      echo "Skiping '$file_name' larger than 2Gb"
+      continue
+    fi
+
+    local found=$(printf "%s" "$json_output" | jq '.assets | .[] | select(.name=="'$file_name'")')
+
+    if [ "$found" = "" ]; then
+      local upload_json=$(curl \
+        -H "Authorization: token $gh_token" \
+        -H "Content-Type: $(file -b --mime-type $file)" \
+        --data-binary @$file \
+        "${upload_url}?name=${file_name}"
+      )
+      files_uploaded=1
+    fi
+  done
+
+  # Check if files need to be deleted
+  local files_delete=0
+  while read -r file ; do
+    if [ ! -e "$ARCH/$file" ]; then
+      files_delete=1
+      break
+    fi
+  done < <(printf "%s" "$json_output" | jq -r '.assets | .[] | .name')
+
+  if [ $files_uploaded -gt 0 ] || [ $files_delete -gt 0 ]; then
+    # Upload new packages db file or update existing one.
+    local repo_db=$(printf "%s" "$json_output" | jq '.assets | .[] | select(.name=="'${REPONAME}.db'")')
+    if [ "$repo_db" != "" ]; then
+      local asset_id=$(printf "%s" "$json_output" | \
+        jq '.assets | .[] | select(.name=="'${REPONAME}.db'") | .id'
+      )
+
+      curl \
+        -X DELETE \
+        -H "Authorization: token $gh_token" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com/repos/$gh_owner/$gh_repo/releases/assets/$asset_id"
+    fi
+    local upload_json=$(curl \
+      -H "Authorization: token $gh_token" \
+      -H "Content-Type: $(file -b --mime-type ${ARCH}/${REPONAME}.db)" \
+      --data-binary @${ARCH}/${REPONAME}.db \
+      "${upload_url}?name=${REPONAME}.db"
+    )
+
+    # Upload new files db file or update existing one.
+    local repo_files=$(printf "%s" "$json_output" | jq '.assets | .[] | select(.name=="'${REPONAME}.files'")')
+    if [ "$repo_files" != "" ]; then
+      local asset_id=$(printf "%s" "$json_output" | \
+        jq '.assets | .[] | select(.name=="'${REPONAME}.files'") | .id'
+      )
+
+      curl \
+        -X DELETE \
+        -H "Authorization: token $gh_token" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com/repos/$gh_owner/$gh_repo/releases/assets/$asset_id"
+    fi
+    local upload_json=$(curl \
+      -H "Authorization: token $gh_token" \
+      -H "Content-Type: $(file -b --mime-type ${ARCH}/${REPONAME}.files)" \
+      --data-binary @${ARCH}/${REPONAME}.files \
+      "${upload_url}?name=${REPONAME}.files"
+    )
+
+    # Delete old package versions
+    printf "%s" "$json_output" | jq -r '.assets | .[] | .name' | \
+    while read -r file ; do
+      if [ ! -e "$ARCH/$file" ]; then
+        local asset_id=$(printf "%s" "$json_output" | \
+          jq '.assets | .[] | select(.name=="'${file}'") | .id'
+        )
+
+        curl \
+          -X DELETE \
+          -H "Authorization: token $gh_token" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/$gh_owner/$gh_repo/releases/assets/$asset_id"
+      fi
+    done
+  fi
 }
 
 add_packages(){
   local ARCH=$(uname -m)
-  local REPONAME=$(cat reponame)
+  local REPONAME=$(config_get reponame)
 
   rm "$ARCH"/"$REPONAME".*
 
@@ -338,27 +547,39 @@ add_packages(){
 repo_usage(){
   echo "# Example usage of this repository on /etc/pacman.conf"
 
-  if [ -e "reponame" ]; then
-    echo "[$(cat reponame)]"
+  if [ "$(config_get reponame)" != "" ]; then
+    echo "[$(config_get reponame)]"
   else
     echo "[reponame]"
   fi
 
   echo "SigLevel = Optional TrustedOnly"
 
-  if [ -e "hostname" ]; then
-    if [ -e "webserver" ]; then
-      echo "Server = $(cat webserver)/\$repo/\$arch"
+  if [ "$(config_get hostname)" != "" ]; then
+    if [ "$(config_get webserver)" != "" ]; then
+      echo "Server = $(config_get webserver)/\$repo/\$arch"
     else
       echo "Server = http://localhost/\$repo/\$arch"
     fi
   fi
 
   if [ -e "git-repo" ]; then
-    cd git-repo
-    #username=$(git config --get user.name)
-    echo "Server = https://raw.githubusercontent.com/\$username/\$repo/main/\$arch"
-    cd ..
+    local git_repo=$(config_get git_repo)
+    local owner=$(echo "$git_repo" \
+      | sed -n "s/.*:\(.*\)\/.*/\1/p"
+    )
+    local repo=$(echo "$git_repo" \
+      | sed -n "s/.*:.*\/\(.*\)/\1/p"
+    )
+    echo "Server = https://raw.githubusercontent.com/$owner/$repo/main/\$arch"
+  fi
+
+  local gh_token=$(config_get gh_release_token)
+  local gh_owner=$(config_get gh_release_owner)
+  local gh_repo=$(config_get gh_release_repo)
+
+  if [ "$gh_owner" != "" ] && [ "$gh_repo" != "" ] && [ "$gh_token" != "" ]; then
+    echo "Server = https://github.com/$gh_owner/$gh_repo/releases/download/\$arch"
   fi
 }
 
@@ -368,7 +589,7 @@ if [ ! -e "packages" ]; then
   read run_setup
   if [ "$run_setup" = "y" ]; then
     setup_repo
-    echo "Setup complete, next time this script is run will start building."
+    echo "Setup complete!"
     exit 0
   else
     exit 1
@@ -381,8 +602,16 @@ case $1 in
     setup_repo
     exit
     ;;
-  'setupgit' )
-    setup_git_repo
+  'setupgh' )
+    setup_gh_repo
+    exit
+    ;;
+  'setupghr' )
+    setup_gh_release_repo
+    exit
+    ;;
+  'setupweb' )
+    setup_webserver_repo
     exit
     ;;
   'clean' )
@@ -408,7 +637,9 @@ case $1 in
     echo ""
     echo "COMMANDS"
     echo "  setup    initialize the system for building"
-    echo "  setupgit (re)configure a github repository mirror"
+    echo "  setupgh  (re)configure a github repository mirror"
+    echo "  setupghr (re)configure a github repository for releases as mirror"
+    echo "  setupweb (re)configure a webserver as mirror"
     echo "  clean    remove all packages"
     echo "  build    build outdated or missing packages and sync to server."
     echo "  addpkgs  generate repo databases and upload sync to server"
@@ -421,7 +652,7 @@ esac
 
 ARCH=$(uname -m)
 PACKAGES_BUILT=()
-REPONAME=$(cat reponame)
+REPONAME=$(config_get reponame)
 
 if [ ! -e "$ARCH" ]; then
   mkdir "$ARCH"
