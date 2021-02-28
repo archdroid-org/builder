@@ -650,14 +650,15 @@ pkgbuild_get_packages(){
   local pkgver=""
   local pkgrel=""
   local epoch=""
+  local subpackages=()
+  local mainpkg=""
 
-  echo "$package_info" | while read line; do
+  while read line; do
     local name=$(echo $line | cut -d"=" -f1 | sed "s/ //g")
     local value=$(echo $line | cut -d"=" -f2 | sed "s/ //g")
 
     if [ "$action" = "name" -a "$name" = "pkgbase" ]; then
       if [[ ! " ${packages[@]} " =~ " $value " ]]; then
-        packages+=("$value")
         pkgname="$value"
         action="version"
       fi
@@ -676,22 +677,32 @@ pkgbuild_get_packages(){
       if [[ ! " ${packages[@]} " =~ " $value " ]]; then
         packages+=("$value")
         if [ "$epoch" != "" ]; then
-          echo "$value-${epoch}:$pkgver-$pkgrel"
+          subpackages+=("$value-${epoch}:$pkgver-$pkgrel")
         else
-          echo "$value-$pkgver-$pkgrel"
+          subpackages+=("$value-$pkgver-$pkgrel")
         fi
       fi
     fi
 
     if [ "$action" = "done" -a "$pkgname" != "" ]; then
       if [ "$epoch" != "" ]; then
-        echo "$pkgname-${epoch}:$pkgver-$pkgrel"
+        mainpkg="$pkgname-${epoch}:$pkgver-$pkgrel"
       else
-        echo "$pkgname-$pkgver-$pkgrel"
+        mainpkg="$pkgname-$pkgver-$pkgrel"
       fi
       action="pkgname"
     fi
-  done
+  done < <(echo "$package_info")
+
+  # If subpackages found only return those.
+  if [ ${#subpackages[@]} -gt 0 ]; then
+    local pkg=""
+    for pkg in "${subpackages[@]}"; do
+      echo "$pkg"
+    done
+  else
+    echo "$mainpkg"
+  fi
 
   cd ../../
 }
