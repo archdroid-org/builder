@@ -397,6 +397,7 @@ sync_repo_gh_release(){
     return
   fi
 
+  echo "Getting release info..."
   json_output=$(curl \
     -H "Authorization: token $gh_token"  \
     -H "Accept: application/vnd.github.v3+json" \
@@ -414,6 +415,7 @@ sync_repo_gh_release(){
       return
     fi
   elif [ "$error" = "Not Found" ]; then
+    echo "Creating release..."
     json_output=$(curl \
       -X POST \
       -H "Authorization: token $gh_token" \
@@ -447,6 +449,7 @@ sync_repo_gh_release(){
     local found=$(printf "%s" "$json_output" | jq '.assets | .[] | select(.name=="'$file_name'")')
 
     if [ "$found" = "" ]; then
+      echo "Uploading $file..."
       local upload_json=$(curl \
         -H "Authorization: token $gh_token" \
         -H "Content-Type: $(file -b --mime-type $file)" \
@@ -468,6 +471,7 @@ sync_repo_gh_release(){
 
   if [ $files_uploaded -gt 0 ] || [ $files_delete -gt 0 ]; then
     # Upload new packages db file or update existing one.
+    echo "Updating ${REPONAME}.db..."
     local repo_db=$(printf "%s" "$json_output" | jq '.assets | .[] | select(.name=="'${REPONAME}.db'")')
     if [ "$repo_db" != "" ]; then
       local asset_id=$(printf "%s" "$json_output" | \
@@ -488,6 +492,7 @@ sync_repo_gh_release(){
     )
 
     # Upload new files db file or update existing one.
+    echo "Updating ${REPONAME}.files..."
     local repo_files=$(printf "%s" "$json_output" | jq '.assets | .[] | select(.name=="'${REPONAME}.files'")')
     if [ "$repo_files" != "" ]; then
       local asset_id=$(printf "%s" "$json_output" | \
@@ -514,6 +519,8 @@ sync_repo_gh_release(){
         local asset_id=$(printf "%s" "$json_output" | \
           jq '.assets | .[] | select(.name=="'${file}'") | .id'
         )
+
+        echo "Deleting ${file}..."
 
         curl \
           -X DELETE \
