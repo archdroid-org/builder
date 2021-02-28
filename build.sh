@@ -234,11 +234,13 @@ setup_gh_release_repo(){
 }
 
 clean_repo(){
+  # Delete files locally
   local ARCH=$(uname -m)
   if [ -e "$ARCH" ]; then
     rm -r "$ARCH"
   fi
 
+  # Delete files from gh repo
   if [ -e "git-repo" ]; then
     cd git-repo
 
@@ -251,6 +253,8 @@ clean_repo(){
 
     git init
     mv config .git/config
+
+    git branch -m master main
 
     if [ -e "README.md" ]; then
       git add README.md
@@ -265,9 +269,38 @@ clean_repo(){
     fi
 
     git commit -m "Cleaned repository"
-    git push -f origin
+    git push -f --set-upstream origin main
 
     cd ..
+  fi
+
+  # Delete files from gh release repo
+  local gh_token=$(config_get gh_release_token)
+  local gh_owner=$(config_get gh_release_owner)
+  local gh_repo=$(config_get gh_release_repo)
+
+  if [ "$gh_owner" != "" ] && [ "$gh_repo" != "" ] && [ "$gh_token" != "" ]; then
+    local json_output=$(curl \
+      -H "Authorization: token $gh_token"  \
+      -H "Accept: application/vnd.github.v3+json" \
+      https://api.github.com/repos/$gh_owner/$gh_repo/releases/tags/$ARCH
+    )
+
+    local error=$(printf "%s" "$json_output" | jq -r ".message" 2>/dev/null)
+
+    if [ "$error" != "null" ] && [ "$?" != "0" ]; then
+      return
+    fi
+
+    # Delete all packages
+    printf "%s" "$json_output" | jq -r '.assets | .[] | .id' | \
+    while read -r asset_id ; do
+      curl \
+        -X DELETE \
+        -H "Authorization: token $gh_token" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com/repos/$gh_owner/$gh_repo/releases/assets/$asset_id"
+    done
   fi
 }
 
@@ -605,6 +638,16 @@ fi
 
 
 case $1 in
+  'config-get' )
+    shift
+    config_get $@
+    exit
+    ;;
+  'config-set' )
+    shift
+    config_write $@
+    exit
+    ;;
   'setup' )
     setup_repo
     exit
@@ -643,15 +686,19 @@ case $1 in
     echo "Helper script to maintain an archlinux repo."
     echo ""
     echo "COMMANDS"
-    echo "  setup    initialize the system for building"
-    echo "  setupgh  (re)configure a github repository mirror"
-    echo "  setupghr (re)configure a github repository for releases as mirror"
-    echo "  setupweb (re)configure a webserver as mirror"
-    echo "  clean    remove all packages"
-    echo "  build    build outdated or missing packages and sync to server."
-    echo "  addpkgs  generate repo databases and upload sync to server"
-    echo "  repodef  view pacman.conf repo sample definition"
-    echo "  help     print this help"
+    echo "  setup       initialize the system for building"
+    echo "  setupgh     (re)configure a github repository mirror"
+    echo "  setupghr    (re)configure a github repository for releases as mirror"
+    echo "  setupweb    (re)configure a webserver as mirror"
+    echo "  config-get  Gets the value of an option on the config.ini"
+    echo "              Params: <option-name>"
+    echo "  config-get  Set the value of an option on the config.ini"
+    echo "              Params: <option-name> <option-value>"
+    echo "  clean       remove all packages"
+    echo "  build       build outdated or missing packages and sync to server."
+    echo "  addpkgs     generate repo databases and upload sync to server"
+    echo "  repodef     view pacman.conf repo sample definition"
+    echo "  help        print this help"
     exit
     ;;
 esac
