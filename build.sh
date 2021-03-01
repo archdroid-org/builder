@@ -12,7 +12,7 @@ trap 'rm -f running.lock' EXIT
 
 # Check if required dependencies are met.
 deps=(
-    ping repo-add git
+    ping repo-add git curl
     sshfs rsync jq grep
     sed awk makepkg file
 )
