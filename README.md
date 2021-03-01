@@ -59,7 +59,7 @@ packages for public access:
 Once you have entered the proper information a config.ini file will be
 generated along the build.sh script with content similar to:
 
-
+**config.ini**
 ```ini
 reponame=myreponame
 hostname=mywebserver.com:/path/to/public/packages
