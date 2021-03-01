@@ -808,7 +808,9 @@ build_packages(){
   # Update PKGBUILDs repository
   #
   cd packages
-  git checkout $(git branch | sed "s/^\* //g")
+  if ! git checkout master ; then
+    git checkout main
+  fi
   git restore .
   git pull
   cd ..
