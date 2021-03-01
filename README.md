@@ -21,7 +21,7 @@ sudo package and set the wheel group as follows:
 %wheel ALL=(ALL) NOPASSWD: ALL
 ```
 
-**Make the user is part of the wheel group:**
+**Make the user part of the wheel group:**
 ```sh
 sudo usermod -aG wheel my-build-username
 ```
