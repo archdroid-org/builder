@@ -5,6 +5,8 @@
 
 cd "$(dirname "$0")" || exit
 
+CURRENT_DIR=$(pwd)
+
 # Prevent running script more than once
 exec 100>running.lock || exit 1
 flock -w 3 100 || exit 1
@@ -624,23 +626,27 @@ repo_usage(){
 }
 
 pkgbuild_get_packages(){
-  if [ ! -e "packages/$1/PKGBUILD" ]; then
-    echo "$1"
-    return 1
-  fi
-
-  cd packages/"$1"
-
   local package_info=""
-  if [ ! -e .SRCINFO ]; then
-    # Update pkgver if possible (this means the package may be a VCS)
-    makepkg -s --noconfirm --nobuild --clean > /dev/null
-    rm -rf src pkg
-    # Get package info
-    package_info=$(makepkg -s --noconfirm --printsrcinfo)
+
+  if [ "$2" = "" ]; then
+    if [ ! -e "packages/$1/PKGBUILD" ]; then
+      echo "$1"
+      return 1
+    fi
+
+    cd packages/"$1"
+
+    if [ ! -e .SRCINFO ]; then
+      # Get package info from cache
+      package_info=$(cat "$CURRENT_DIR"/cache/"$1")
+    else
+      # Use already provided .SRCINFO which is faster
+      package_info=$(cat .SRCINFO)
+    fi
+
+    cd ../../
   else
-    # Use already provided .SRCINFO which is faster
-    package_info=$(cat .SRCINFO)
+    package_info=$(cat "$2")
   fi
 
   local packages=()
@@ -703,8 +709,66 @@ pkgbuild_get_packages(){
   else
     echo "$mainpkg"
   fi
+}
 
-  cd ../../
+pkgbuild_get_version(){
+  local package_info=""
+
+  if [ "$2" = "" ]; then
+    if [ ! -e "packages/$1/PKGBUILD" ]; then
+      echo "$1"
+      return 1
+    fi
+
+    cd packages/"$1"
+
+    if [ ! -e .SRCINFO ]; then
+      # Get package info from cache
+      package_info=$(cat "$CURRENT_DIR"/cache/"$1")
+    else
+      # Use already provided .SRCINFO which is faster
+      package_info=$(cat .SRCINFO)
+    fi
+
+    cd ../../
+  else
+    package_info=$(cat "$2")
+  fi
+
+  local action="version"
+
+  local pkgver=""
+  local pkgrel=""
+  local epoch=""
+
+  while read line; do
+    local name=$(echo $line | cut -d"=" -f1 | sed "s/ //g")
+    local value=$(echo $line | cut -d"=" -f2 | sed "s/ //g")
+
+    if [ "$action" = "version" -a "$name" = "pkgver" ]; then
+      pkgver="$value"
+      action="release"
+    elif [ "$action" = "release" -a "$name" = "pkgrel" ]; then
+      pkgrel="$value"
+      action="epoch"
+    elif [ "$action" = "epoch" -a "$name" = "epoch" ]; then
+      epoch="$value"
+      action="done"
+    elif [ "$action" = "epoch" -a "$name" = "arch" ]; then
+      action="done"
+    fi
+
+    if [ "$action" = "done" ]; then
+      if [ "$epoch" != "" ]; then
+        echo "${epoch}:$pkgver-$pkgrel"
+      else
+        echo "$pkgver-$pkgrel"
+      fi
+      return 0
+    fi
+  done < <(echo "$package_info")
+
+  return 1
 }
 
 pkgbuild_build_if_needed(){
@@ -712,16 +776,7 @@ pkgbuild_build_if_needed(){
 
   # Remove package directory if PKGBUILD doesn't exists
   if [ ! -e "packages/$1/PKGBUILD" ]; then
-    if [ -e "packages/$1/current_packages" ]; then
-      local package=""
-      for package in $(cat packages/$1/current_packages); do
-        rm -vf "$ARCH"/"$package"*".pkg.tar."*
-      done
-    else
-      rm -vf "$ARCH"/"$1"*".pkg.tar."*
-    fi
-    rm -rf "packages/$1"
-    echo "Package removed from repository."
+    echo "Package not found."
     return 3
   fi
 
@@ -735,7 +790,9 @@ pkgbuild_build_if_needed(){
     echo "Building $pkg..."
     cd packages/"$1"
 
-    makepkg -s --noconfirm --clean --cleanbuild > build.log 2>&1
+    pkgbuild_build_dependencies $1 > build.log 2>&1 3>&1
+
+    makepkg -s --rmdeps --noprogressbar --noconfirm --clean --cleanbuild >> build.log 2>&1 3>&1
     make_status=$?
     if [ $make_status -eq 0 ]; then
       if [ -e "current_packages" ]; then
@@ -791,14 +848,137 @@ pkgbuild_build(){
   fi
 }
 
+pkgbuild_build_dependencies(){
+  local ARCH=$(uname -m)
+  local previous_dir=$(pwd)
+
+  cd $CURRENT_DIR
+
+  if [ -e "packages/$1/PKGBUILD" ]; then
+    local pkgbuild=""
+    if [ -e "packages/$1/.SRCINFO" ]; then
+      pkgbuild=$(cat "packages/$1/.SRCINFO")
+    else
+      cd "packages/$1"
+      pkgbuild=$(makepkg --printsrcinfo)
+      cd ../..
+    fi
+
+    local dependencies=()
+
+    while read -r line ; do
+      dependencies+=($(echo $line | cut -d"=" -f2 | sed "s/ //g"))
+    done < <(echo "$pkgbuild" | grep -E "(\s+makedepends = )|(\s+depends = )")
+
+    local dependency=""
+    for dependency in "${dependencies[@]}" ; do
+      cd cache
+      local package=$(grep -RE 'pkgname = '"$dependency"'$' | cut -d":" -f1)
+      cd ..
+
+      if [ "$package" != "" ] && [ "$package" != "$1" ] ; then
+        echo "Checking if dependecy '$dependency' needs building and installing."
+        local package_version=$(pkgbuild_get_version $package cache/$package \
+          | head -n1
+        )
+
+        echo "  Package version $package_version"
+
+        local installed_version=$(pacman -Qi "$dependency" 2>/dev/null \
+          | grep "Version" \
+          | cut -d":" -f2 | sed "s/ //"
+        )
+
+        # install package if not already installed
+        if [ "$installed_version" = "" ] || [ "$installed_version" != "$package_version" ]; then
+          echo "  Checking if build needed and build"
+          pkgbuild_build_if_needed "$package" "$package-$package_version"
+
+          echo "  Checking if install needed and install"
+
+          sudo pacman -U --needed --noconfirm "$ARCH/$dependency-$package_version"*
+        else
+          echo "  Installed version $installed_version"
+        fi
+      fi
+    done
+  fi
+
+  cd "$previous_dir"
+
+  return 0
+}
+
+pkgbuild_clean_removed(){
+  echo "Performing repository cleaning..."
+  local package=""
+  for package in $(ls packages) ; do
+    if [ ! -d "packages/$package" ]; then
+      continue
+    fi
+
+    if [ ! -e "packages/$package/PKGBUILD" ]; then
+      if [ -e "packages/$package/current_packages" ]; then
+        local entry=""
+        for entry in $(cat packages/$package/current_packages); do
+          rm -vf "$ARCH"/"$entry"*".pkg.tar."*
+        done
+      else
+        rm -vf "$ARCH"/"$package"*".pkg.tar."*
+      fi
+      rm -rf "packages/$package"
+      echo "  Package '$package' removed from repository."
+    fi
+  done
+}
+
+pkgbuild_srcinfo_cache(){
+  if [ ! -e "cache" ]; then
+    mkdir cache
+  else
+    rm -rf cache
+    mkdir cache
+  fi
+
+  local packages=()
+  if [ "$1" = "" ]; then
+    packages=($(ls packages))
+  else
+    packages=($@)
+  fi
+
+  for entry in "${packages[@]}"; do
+    if [ -d "packages/$entry" ] && [ -e "packages/$entry/PKGBUILD" ]; then
+      if [ -e "packages/$entry/.SRCINFO" ]; then
+        cp "packages/$entry/.SRCINFO" cache/$entry
+      else
+        echo "  Building .SRCINFO for '$entry'..."
+        cd packages/$entry
+
+        # Update pkgver if possible (since this package may be a VCS)
+        makepkg -s --noconfirm --nobuild --clean > /dev/null 2>&1 3>&1
+
+        if [ "$?" != "0" ]; then
+          echo "    Failed"
+          exit 1
+        else
+          makepkg --printsrcinfo > "$CURRENT_DIR/cache/$entry"
+        fi
+
+        rm -rf src pkg
+
+        cd ../../
+      fi
+    fi
+  done
+}
+
 build_packages(){
   local ARCH=$(uname -m)
   local REPONAME=$(config_get reponame)
   local PACKAGES_BUILT=()
 
   echo "Started on: $(date)"
-  sudo pacman -Suy --noconfirm
-  echo "Starting build process..."
 
   if [ ! -e "$ARCH" ]; then
     mkdir "$ARCH"
@@ -808,55 +988,121 @@ build_packages(){
   # Update PKGBUILDs repository
   #
   cd packages
-  if ! git checkout master ; then
-    git checkout main
+  if ! git checkout master >/dev/null 2>&1 ; then
+    if ! git checkout main >/dev/null 2>&1 ; then
+      echo "No master or main branch found on the packages repo."
+      cd ..
+      exit 1
+    fi
   fi
   git restore .
+  git config pull.rebase false
   git pull
   cd ..
+
+  # Remove packages deleted from git repo
+  pkgbuild_clean_removed
 
   #
   # Make a list of packages to build
   #
-  local packages=()
+  local temp_packages=()
   if [ -e "skip" ]; then
-    packages=(
+    temp_packages=(
       $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2 | grep -v -f skip)
     )
   else
-    packages=(
+    temp_packages=(
       $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2)
     )
   fi
 
-  #
-  # Build packages not already built or outdated
-  #
-  local package=""
-  for package in "${packages[@]}"; do
-    local built=0
-    local names=$(pkgbuild_get_packages "$package")
-    local name=""
-    for name in $(echo $names | xargs); do
-      pkgbuild_build_if_needed "$package" "$name"
-      if [ $? -eq 1 ]; then
-        PACKAGES_BUILT+=("$package")
-        built=1
-      fi
-      break
-    done
-    if [ $built -gt 0 ]; then
-      local names_no_colon=$(echo $names | sed "s/:/\./g")
-      echo $names_no_colon > packages/$package/current_packages
-    fi
-  done
+  # Array to store the packages to build
+  local packages=()
 
-  #
-  # Upload built packages
-  #
-  if [ ${#PACKAGES_BUILT[@]} -gt 0 ]; then
-    add_packages
-    sync_repo
+  # Check if commit of last build is available.
+  local last_commit=$(config_get last_commit)
+
+  if [ "$last_commit" = "" ] || [ ! -e "packages/.git" ] ; then
+    # No previous commit stored so try to build all packages.
+    packages=(${temp_packages[@]})
+  else
+    # Previous commit found so build only updated and vcs packages.
+    cd packages
+    local newest_commit=$(git log -n 1 --format="%H")
+
+    # Store list of packages that changed
+    if [ "$last_commit" != "$newest_commit" ]; then
+      while read -r line ; do
+        local package=$(echo $line | cut -d"/" -f1)
+        if [ -e "$package" ]; then
+          packages+=($(echo $line | cut -d"/" -f1))
+        fi
+      done < <(git diff --name-only $last_commit $newest_commit | grep "/PKGBUILD")
+    fi
+
+    # Now add packages without .SRCINFO, they should be vcs packages
+    local package=""
+    for package in "${temp_packages[@]}" ; do
+      if [ ! -e "$package/.SRCINFO" ]; then
+        packages+=($package)
+      fi
+    done
+    cd ..
+  fi
+
+  # unset temp_packages
+  unset temp_packages
+
+  if [ ${#packages[@]} -lt 1 ]; then
+    echo "No package needs building."
+  else
+    sudo pacman -Suy --noconfirm
+
+    echo  "Builiding packages .SRCINFO cache... "
+    pkgbuild_srcinfo_cache
+
+    echo "Starting build process..."
+
+    #
+    # Build packages not already built or outdated
+    #
+    local package=""
+    for package in "${packages[@]}"; do
+      local built=0
+      local names=$(pkgbuild_get_packages "$package")
+      local name=""
+      for name in $(echo $names | xargs); do
+        pkgbuild_build_if_needed "$package" "$name"
+        if [ $? -eq 1 ]; then
+          PACKAGES_BUILT+=("$package")
+          built=1
+        fi
+        break
+      done
+      if [ $built -gt 0 ]; then
+        local names_no_colon=$(echo $names | sed "s/:/\./g")
+        echo $names_no_colon > packages/$package/current_packages
+      fi
+    done
+
+    #
+    # Upload built packages
+    #
+    if [ ${#PACKAGES_BUILT[@]} -gt 0 ]; then
+      add_packages
+      sync_repo
+    fi
+
+    # Save the commit we just built.
+    cd packages
+    local last_commit="$(git log -n 1 --format='%H')"
+    cd ..
+    config_write last_commit "$last_commit"
+
+    # remove srcinfo cache dir
+    echo "Removing .SRCINFO cache dir..."
+    rm -rf cache
   fi
 
   echo "Ended on: $(date)"
@@ -955,9 +1201,18 @@ case $1 in
     sync_repo
     exit
     ;;
+  'pkgnames' )
+    shift
+    pkgbuild_srcinfo_cache $@ > /dev/null 2>&1 3>&1
+    pkgbuild_get_packages $@
+    rm -rf cache
+    exit
+    ;;
   'pkgver' )
     shift
-    pkgbuild_get_packages $@
+    pkgbuild_srcinfo_cache $@ > /dev/null 2>&1 3>&1
+    pkgbuild_get_version $@
+    rm -rf cache
     exit
     ;;
   'repodef' )
@@ -989,14 +1244,16 @@ case $1 in
     echo -e "  ${g}setupweb${d}    (Re)configure a webserver as mirror"
     echo -e "  ${g}config-get${d}  Gets the value of an option on the config.ini."
     echo -e "              Params: <option-name>"
-    echo -e "  ${g}config-get${d}  Set the value of an option on the config.ini."
+    echo -e "  ${g}config-set${d}  Set the value of an option on the config.ini."
     echo -e "              Params: <option-name> <option-value>"
     echo -e "  ${g}clean${d}       Remove all packages locally and remotely."
     echo -e "  ${g}build${d}       Build outdated or missing packages and sync to server."
     echo -e "  ${g}buildpkg${d}    Build a single package without syncing."
     echo -e "              Params: <package-name>"
     echo -e "  ${g}addpkgs${d}     Generate repo databases and upload sync to server."
-    echo -e "  ${g}pkgver${d}      Get a package names with version."
+    echo -e "  ${g}pkgnames${d}    Get a package names list."
+    echo -e "              Params: <package-name>"
+    echo -e "  ${g}pkgver${d}      Get package latest version."
     echo -e "              Params: <package-name>"
     echo -e "  ${g}repodef${d}     View pacman.conf repo sample definition."
     echo -e "  ${g}help${d}        Print this help."
