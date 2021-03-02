@@ -164,21 +164,26 @@ other-package
 ```
 Helper script to maintain an archlinux repo.
 
-COMMANDS
+Usage: build.sh [COMMAND] [<parameter>]
+
+Available Commands:
+
   setup       Initialize the system for building.
   setupgh     (Re)configure a github repository mirror
   setupghr    (Re)configure a github repository for releases as mirror
   setupweb    (Re)configure a webserver as mirror
   config-get  Gets the value of an option on the config.ini.
               Params: <option-name>
-  config-get  Set the value of an option on the config.ini.
+  config-set  Set the value of an option on the config.ini.
               Params: <option-name> <option-value>
   clean       Remove all packages locally and remotely.
   build       Build outdated or missing packages and sync to server.
   buildpkg    Build a single package without syncing.
               Params: <package-name>
   addpkgs     Generate repo databases and upload sync to server.
-  pkgver      Get a package names with version.
+  pkgnames    Get a package names list.
+              Params: <package-name>
+  pkgver      Get package latest version.
               Params: <package-name>
   repodef     View pacman.conf repo sample definition.
   help        Print this help.
