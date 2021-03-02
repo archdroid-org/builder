@@ -974,26 +974,32 @@ case $1 in
     exit
     ;;
   * )
+    script_name=$(basename $0)
+    g="\e[32m" # green
+    d="\e[0m"  # default
     echo "Helper script to maintain an archlinux repo."
     echo ""
-    echo "COMMANDS"
-    echo "  setup       Initialize the system for building."
-    echo "  setupgh     (Re)configure a github repository mirror"
-    echo "  setupghr    (Re)configure a github repository for releases as mirror"
-    echo "  setupweb    (Re)configure a webserver as mirror"
-    echo "  config-get  Gets the value of an option on the config.ini."
-    echo "              Params: <option-name>"
-    echo "  config-get  Set the value of an option on the config.ini."
-    echo "              Params: <option-name> <option-value>"
-    echo "  clean       Remove all packages locally and remotely."
-    echo "  build       Build outdated or missing packages and sync to server."
-    echo "  buildpkg    Build a single package without syncing."
-    echo "              Params: <package-name>"
-    echo "  addpkgs     Generate repo databases and upload sync to server."
-    echo "  pkgver      Get a package names with version."
-    echo "              Params: <package-name>"
-    echo "  repodef     View pacman.conf repo sample definition."
-    echo "  help        Print this help."
+    echo "Usage: $script_name [COMMAND] [<parameter>]"
+    echo ""
+    echo "Available Commands:"
+    echo ""
+    echo -e "  ${g}setup${d}       Initialize the system for building."
+    echo -e "  ${g}setupgh${d}     (Re)configure a github repository mirror"
+    echo -e "  ${g}setupghr${d}    (Re)configure a github repository for releases as mirror"
+    echo -e "  ${g}setupweb${d}    (Re)configure a webserver as mirror"
+    echo -e "  ${g}config-get${d}  Gets the value of an option on the config.ini."
+    echo -e "              Params: <option-name>"
+    echo -e "  ${g}config-get${d}  Set the value of an option on the config.ini."
+    echo -e "              Params: <option-name> <option-value>"
+    echo -e "  ${g}clean${d}       Remove all packages locally and remotely."
+    echo -e "  ${g}build${d}       Build outdated or missing packages and sync to server."
+    echo -e "  ${g}buildpkg${d}    Build a single package without syncing."
+    echo -e "              Params: <package-name>"
+    echo -e "  ${g}addpkgs${d}     Generate repo databases and upload sync to server."
+    echo -e "  ${g}pkgver${d}      Get a package names with version."
+    echo -e "              Params: <package-name>"
+    echo -e "  ${g}repodef${d}     View pacman.conf repo sample definition."
+    echo -e "  ${g}help${d}        Print this help."
     exit
     ;;
 esac
