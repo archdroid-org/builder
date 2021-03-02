@@ -1067,6 +1067,11 @@ build_packages(){
   else
     sudo pacman -Suy --noconfirm
 
+    if [ "$?" != "0" ]; then
+      echo "Error while upgrading system packages."
+      exit 1
+    fi
+
     echo  "Builiding packages .SRCINFO cache... "
     pkgbuild_srcinfo_cache
 
