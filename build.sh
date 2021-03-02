@@ -942,7 +942,15 @@ pkgbuild_srcinfo_cache(){
 
   local packages=()
   if [ "$1" = "" ]; then
-    packages=($(ls packages))
+    if [ -e "skip" ]; then
+      packages=(
+        $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2 | grep -v -f skip)
+      )
+    else
+      packages=(
+        $(find packages -maxdepth 1 -type d -not -name ".git" | tail -n +2 | cut -d"/" -f2)
+      )
+    fi
   else
     packages=($@)
   fi
