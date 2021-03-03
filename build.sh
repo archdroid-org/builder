@@ -832,6 +832,11 @@ pkgbuild_build_if_needed(){
 }
 
 pkgbuild_build(){
+  echo  "Builiding packages .SRCINFO cache... "
+  pkgbuild_srcinfo_cache
+
+  echo "Starting build process..."
+
   local built=0
   local names="$(pkgbuild_get_packages "$1")"
   local name=""
@@ -846,6 +851,9 @@ pkgbuild_build(){
     local names_no_colon=$(echo $names | sed "s/:/\./g")
     echo $names_no_colon > packages/$1/current_packages
   fi
+
+  echo "Removing .SRCINFO cache dir..."
+  rm -rf cache
 }
 
 pkgbuild_build_dependencies(){
@@ -896,7 +904,9 @@ pkgbuild_build_dependencies(){
 
           echo "  Checking if install needed and install"
 
-          sudo pacman -U --needed --noconfirm "$ARCH/$dependency-$package_version"*
+          local version_no_colon=$(echo "$package_version" | sed "s/:/\./g")
+
+          sudo pacman -U --needed --noconfirm "$ARCH/$dependency-$version_no_colon"*
         else
           echo "  Installed version $installed_version"
         fi
