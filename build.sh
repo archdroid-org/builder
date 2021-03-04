@@ -582,16 +582,13 @@ add_packages(){
   rm "$ARCH"/"$REPONAME".*
 
   repo-add --new --prevent-downgrade "$ARCH"/"$REPONAME".db.tar.gz \
-    $(ls "$ARCH"/* | grep -v $REPONAME.db | grep -v $REPONAME.files)
+    $(ls "$ARCH"/* | grep -v $REPONAME.db | grep -v $REPONAME.files | grep -v packages.json)
 
   rm "$ARCH"/"$REPONAME".db
-  cp "$ARCH"/"$REPONAME".db.tar.gz "$ARCH"/"$REPONAME".db
+  mv "$ARCH"/"$REPONAME".db.tar.gz "$ARCH"/"$REPONAME".db
 
   rm "$ARCH"/"$REPONAME".files
-  cp "$ARCH"/"$REPONAME".files.tar.gz "$ARCH"/"$REPONAME".files
-
-  rm "$ARCH"/"$REPONAME".db.tar.gz
-  rm "$ARCH"/"$REPONAME".files.tar.gz
+  mv "$ARCH"/"$REPONAME".files.tar.gz "$ARCH"/"$REPONAME".files
 }
 
 repo_usage(){
