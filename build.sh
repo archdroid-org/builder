@@ -547,6 +547,14 @@ sync_repo_gh_release(){
       "${upload_url}?name=${REPONAME}.files"
     )
 
+    echo "Updating packages.json..."
+    local upload_json=$(curl \
+      -H "Authorization: token $gh_token" \
+      -H "Content-Type: $(file -b --mime-type ${ARCH}/packages.json)" \
+      --data-binary @${ARCH}/packages.json \
+      "${upload_url}?name=packages.json"
+    )
+
     # Delete old package versions
     printf "%s" "$json_output" | jq -r '.assets | .[] | .name' | \
     while read -r file ; do
