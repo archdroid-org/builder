@@ -1153,7 +1153,9 @@ build_packages(){
     # Upload built packages
     #
     if [ ${#PACKAGES_BUILT[@]} -gt 0 ]; then
+      echo "Generating packages.json..."
       build_packages_json > "$ARCH/packages.json"
+
       add_packages
       sync_repo
     fi
