@@ -547,7 +547,20 @@ sync_repo_gh_release(){
       "${upload_url}?name=${REPONAME}.files"
     )
 
+    # Re-upload packages.json
     echo "Updating packages.json..."
+    local repo_files=$(printf "%s" "$json_output" | jq '.assets | .[] | select(.name=="'packages.json'")')
+    if [ "$repo_files" != "" ]; then
+      local asset_id=$(printf "%s" "$json_output" | \
+        jq '.assets | .[] | select(.name=="'packages.json'") | .id'
+      )
+
+      curl \
+        -X DELETE \
+        -H "Authorization: token $gh_token" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com/repos/$gh_owner/$gh_repo/releases/assets/$asset_id"
+    fi
     local upload_json=$(curl \
       -H "Authorization: token $gh_token" \
       -H "Content-Type: $(file -b --mime-type ${ARCH}/packages.json)" \
