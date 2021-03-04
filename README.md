@@ -185,6 +185,7 @@ Available Commands:
               Params: <package-name>
   pkgver      Get package latest version.
               Params: <package-name>
+  pkgjson     Generate json information of all packages.
   repodef     View pacman.conf repo sample definition.
   help        Print this help.
 ```
