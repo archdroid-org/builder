@@ -1057,7 +1057,7 @@ pkgbuild_srcinfo_cache(){
 
 build_packages_json(){
   local output="{\n"
-  output="$output  packages: [\n"
+  output="$output  \"packages\": [\n"
 
   local first=1
 
@@ -1071,9 +1071,9 @@ build_packages_json(){
         output="$output,\n"
       fi
       output="$output    {\n"
-      output="$output"'      name: "'$name'",\n'
-      output="$output"'      description: "'$(echo "$pkgdesc" | sed 's|"|\"|g')'",\n'
-      output="$output"'      version: "'$pkgver'"\n'
+      output="$output"'      "name": "'$name'",\n'
+      output="$output"'      "description": "'$(echo "$pkgdesc" | sed 's|"|\"|g')'",\n'
+      output="$output"'      "version": "'$pkgver'"\n'
       output="$output    }"
       first=0
     done
