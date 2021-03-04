@@ -630,6 +630,52 @@ repo_usage(){
   fi
 }
 
+pkgbuild_get_description(){
+  local package_info=""
+
+  if [ ! -e "packages/$1/PKGBUILD" ]; then
+    echo "$1"
+    return 1
+  fi
+
+  cd packages/"$1"
+
+  if [ ! -e .SRCINFO ]; then
+    # Get package info from cache
+    package_info=$(cat "$CURRENT_DIR"/cache/"$1")
+  else
+    # Use already provided .SRCINFO which is faster
+    package_info=$(cat .SRCINFO)
+  fi
+
+  cd ../../
+
+  local defaultdesc=$(echo "$package_info" \
+    | grep "pkgdesc = " | head -n1 | cut -d"=" -f2 | sed "s/^ *//"
+  )
+
+  local action="pkgname"
+
+  local pkgname=""
+  local pkgdesc=""
+
+  while read line; do
+    local name=$(echo $line | cut -d"=" -f1 | sed "s/ //g")
+    local value=$(echo $line | cut -d"=" -f2 | sed "s/^ *//")
+
+    if [ "$action" = "pkgdesc" -a "$name" = "pkgdesc" ]; then
+      echo "$value"
+      return
+    elif [ "$action" = "pkgname" -a "$name" = "pkgname" ]; then
+      if [ "$value" = "$2" ]; then
+        action="pkgdesc"
+      fi
+    fi
+  done < <(echo "$package_info")
+
+  echo "$defaultdesc"
+}
+
 pkgbuild_get_packages(){
   local package_info=""
 
@@ -1004,10 +1050,10 @@ build_packages_json(){
 
   for package in $(ls cache); do
     local pkgver=$(pkgbuild_get_version "$package")
-    local pkgdesc=$(cat "cache/$package" | grep "pkgdesc = " | cut -d"=" -f2 | sed "s/^ *//")
     local subpackage=""
     for subpackage in $(pkgbuild_get_packages "$package"); do
       local name=$(echo $subpackage | sed "s|-$pkgver||")
+      local pkgdesc=$(pkgbuild_get_description "$package" "$name")
       if [ $first -lt 1 ]; then
         output="$output,\n"
       fi
