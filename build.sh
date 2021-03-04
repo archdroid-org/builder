@@ -991,6 +991,38 @@ pkgbuild_srcinfo_cache(){
   done
 }
 
+build_packages_json(){
+  local output="{\n"
+  output="$output  packages: [\n"
+
+  local first=1
+
+  for package in $(ls cache); do
+    local pkgver=$(pkgbuild_get_version "$package")
+    local pkgdesc=$(cat "cache/$package" | grep "pkgdesc = " | cut -d"=" -f2 | sed "s/^ *//")
+    local subpackage=""
+    for subpackage in $(pkgbuild_get_packages "$package"); do
+      local name=$(echo $subpackage | sed "s|-$pkgver||")
+      if [ $first -lt 1 ]; then
+        output="$output,\n"
+      fi
+      output="$output    {\n"
+      output="$output"'      name: "'$name'",\n'
+      output="$output"'      description: "'$(echo "$pkgdesc" | sed 's|"|\"|g')'",\n'
+      output="$output"'      version: "'$pkgver'"\n'
+      output="$output    }"
+      first=0
+    done
+  done
+
+  output="$output\n"
+
+  output="$output  ]\n"
+  output="$output}"
+
+  echo -e "$output"
+}
+
 build_packages(){
   local ARCH=$(uname -m)
   local REPONAME=$(config_get reponame)
@@ -1113,6 +1145,7 @@ build_packages(){
     # Upload built packages
     #
     if [ ${#PACKAGES_BUILT[@]} -gt 0 ]; then
+      build_packages_json > "$ARCH/packages.json"
       add_packages
       sync_repo
     fi
@@ -1238,6 +1271,13 @@ case $1 in
     rm -rf cache
     exit
     ;;
+  'pkgjson' )
+    shift
+    pkgbuild_srcinfo_cache > /dev/null 2>&1 3>&1
+    build_packages_json
+    rm -rf cache
+    exit
+    ;;
   'repodef' )
     repo_usage
     exit
@@ -1278,6 +1318,7 @@ case $1 in
     echo -e "              Params: <package-name>"
     echo -e "  ${g}pkgver${d}      Get package latest version."
     echo -e "              Params: <package-name>"
+    echo -e "  ${g}pkgjson${d}     Generate json information of all packages."
     echo -e "  ${g}repodef${d}     View pacman.conf repo sample definition."
     echo -e "  ${g}help${d}        Print this help."
     exit
