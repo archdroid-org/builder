@@ -1055,34 +1055,132 @@ pkgbuild_srcinfo_cache(){
   done
 }
 
-build_packages_json(){
-  local output="{\n"
-  output="$output  \"packages\": [\n"
+# Get a package properties by using the files database file, this database
+# needs to be extracted manually before executing this function to the
+# cache_files directory.
+# @param package name and version eg: mypackage-5.1-4
+# @param property Possible values are FILENAME NAME BASE VERSION DESC
+# CSIZE ISIZE MD5SUM SHA256SUM URL LICENSE ARCH BUILDDATE PACKAGER DEPENDS
+# REPLACES CONFLICTS PROVIDES
+# @param default A default value if property not found
+pkgbuild_get_info(){
+  if [ -e "cache_files/$1/desc" ]; then
+    local line_num=$(
+      grep -n "%$2%" cache_files/$1/desc | cut -d":" -f1
+    )
+    if [ "$line_num" = "" ] || [ $line_num -lt 1 ]; then
+      echo "$3"
+      return 1
+    fi
+    while read -r line ; do
+      if echo "$line" | grep "%" > /dev/null ; then
+        return 0
+      fi
 
+      if [ "$line" != "" ]; then
+        echo "$line"
+      fi
+    done < <(tail -n+$((line_num+1)) cache_files/$1/desc)
+    return 0
+  fi
+
+  echo "$3"
+
+  return 1
+}
+
+build_packages_json(){
+  local ARCH=$(uname -m)
+  local REPONAME=$(config_get reponame)
+
+  if [ ! -e "$ARCH/$REPONAME.files" ]; then
+    echo "File '$ARCH/$REPONAME.files' is required but does not exists."
+    return 1
+  else
+    if [ -e "cache_files" ]; then
+      rm -rf "cache_files"
+    fi
+    mkdir cache_files
+    tar -xvzf "$ARCH/$REPONAME.files" -C cache_files > /dev/null
+  fi
+
+  local output="[\n"
   local first=1
 
-  for package in $(ls cache); do
-    local pkgver=$(pkgbuild_get_version "$package")
-    local subpackage=""
-    for subpackage in $(pkgbuild_get_packages "$package"); do
-      local name=$(echo $subpackage | sed "s|-$pkgver||")
-      local pkgdesc=$(pkgbuild_get_description "$package" "$name")
-      if [ $first -lt 1 ]; then
-        output="$output,\n"
-      fi
-      output="$output    {\n"
-      output="$output"'      "name": "'$name'",\n'
-      output="$output"'      "description": "'$(echo "$pkgdesc" | sed 's|"|\"|g')'",\n'
-      output="$output"'      "version": "'$pkgver'"\n'
-      output="$output    }"
-      first=0
-    done
+  local subpackage=""
+  for subpackage in $(ls cache_files); do
+    if [ $first -lt 1 ]; then
+      output="$output,\n"
+    fi
+
+    local pkgver=$(pkgbuild_get_info "$subpackage" VERSION "0.1-1")
+    local version=$(echo $pkgver | sed 's/\-[0-9]*$//')
+    local release=$(echo $pkgver | grep -Eo '[0-9]+$')
+
+    local base=$(pkgbuild_get_info "$subpackage" BASE "")
+    local name=$(pkgbuild_get_info "$subpackage" NAME "")
+    local url=$(pkgbuild_get_info "$subpackage" URL "")
+    local desc=$(pkgbuild_get_info "$subpackage" DESC "")
+
+    local builtseconds=$(pkgbuild_get_info "$subpackage" BUILDDATE "0")
+    local csize=$(pkgbuild_get_info "$subpackage" CSIZE "0")
+    local isize=$(pkgbuild_get_info "$subpackage" ISIZE "0")
+
+    local license=($(pkgbuild_get_info "$subpackage" LICENSE "" \
+        | awk '{ print "\"" $0 "\", " }'
+    ))
+    local depends=($(pkgbuild_get_info "$subpackage" DEPENDS "" \
+      | awk '{ print "\"" $0 "\", " }'
+    ))
+    local optdepends=($(pkgbuild_get_info "$subpackage" OPTDEPENDS "" \
+        | awk '{ print "\"" $0 "\", " }'
+    ))
+    local replaces=($(pkgbuild_get_info "$subpackage" REPLACES "" \
+      | awk '{ print "\"" $0 "\", " }'
+    ))
+    local conflicts=($(pkgbuild_get_info "$subpackage" CONFLICTS "" \
+      | awk '{ print "\"" $0 "\", " }'
+    ))
+
+    # Disabled files because the output json would be huge.
+    #local files=""
+    #if [ -e "cache_files/$subpackage/files" ]; then
+      #files=($(cat cache_files/"$subpackage/files" \
+        #| grep -v "%FILES%" | grep -Ev "/$" \
+        #| awk '{ print "\"" $1 "\"" }'
+      #))
+    #fi
+
+    output="$output  {\n"
+    output="$output"'    "base": "'$base'",\n'
+    output="$output"'    "name": "'$name'",\n'
+    output="$output"'    "description": "'$(echo "$desc" | sed 's|"|\"|g')'",\n'
+    output="$output"'    "url": "'$url'",\n'
+    if [ ${#license[@]} -gt 1 ]; then
+      output="$output"'    "license": ['$(echo ${license[@]} | sed 's/,$//;s/""//')'],\n'
+    else
+      output="$output"'    "license": '$(echo ${license[@]} | sed 's/,$//;s/""//')',\n'
+    fi
+    output="$output"'    "version": "'$version'",\n'
+    output="$output"'    "release": "'$release'",\n'
+    output="$output"'    "builddate": "'$(date -d@$builtseconds -u +%Y-%m-%dT%T)'",\n'
+    output="$output"'    "depends": ['$(echo ${depends[@]} | sed 's/,$//;s/""//')'],\n'
+    output="$output"'    "optdepends": ['$(echo ${optdepends[@]} | sed 's/,$//;s/""//')'],\n'
+    output="$output"'    "replaces": ['$(echo ${replaces[@]} | sed 's/,$//;s/""//')'],\n'
+    output="$output"'    "conflicts": ['$(echo ${conflicts[@]} | sed 's/,$//;s/""//')'],\n'
+    output="$output"'    "csize": '$csize',\n'
+    output="$output"'    "isize": '$isize'\n'
+    #output="$output"'    "files": ['$(echo ${files[@]} | join_by join_by ", ")']\n'
+    output="$output  }"
+
+    first=0
   done
 
   output="$output\n"
 
-  output="$output  ]\n"
-  output="$output}"
+  output="$output]"
+
+  rm -rf cache_files
 
   echo -e "$output"
 }
@@ -1209,10 +1307,11 @@ build_packages(){
     # Upload built packages
     #
     if [ ${#PACKAGES_BUILT[@]} -gt 0 ]; then
+      echo "Updating packages database..."
+      add_packages
       echo "Generating packages.json..."
       build_packages_json > "$ARCH/packages.json"
-
-      add_packages
+      echo "Syncing repositories..."
       sync_repo
     fi
 
@@ -1338,10 +1437,7 @@ case $1 in
     exit
     ;;
   'pkgjson' )
-    shift
-    pkgbuild_srcinfo_cache > /dev/null 2>&1 3>&1
     build_packages_json
-    rm -rf cache
     exit
     ;;
   'repodef' )
