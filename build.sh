@@ -1104,6 +1104,14 @@ build_packages_json(){
     tar -xvzf "$ARCH/$REPONAME.files" -C cache_files > /dev/null
   fi
 
+  local packages=()
+  local package=""
+  for package in $(ls cache_files); do
+    local version=$(pkgbuild_get_info "$package" VERSION "")
+    packages+=($(echo "$package" | sed "s|-$version||"))
+    local packages+=($(pkgbuild_get_info "$package" PROVIDES ""))
+  done
+
   local output="[\n"
   local first=1
 
@@ -1121,6 +1129,7 @@ build_packages_json(){
     local name=$(pkgbuild_get_info "$subpackage" NAME "")
     local url=$(pkgbuild_get_info "$subpackage" URL "")
     local desc=$(pkgbuild_get_info "$subpackage" DESC "")
+    local arch=$(pkgbuild_get_info "$subpackage" ARCH "")
 
     local builtseconds=$(pkgbuild_get_info "$subpackage" BUILDDATE "0")
     local csize=$(pkgbuild_get_info "$subpackage" CSIZE "0")
@@ -1129,12 +1138,34 @@ build_packages_json(){
     local license=($(pkgbuild_get_info "$subpackage" LICENSE "" \
         | awk '{ print "\"" $0 "\", " }'
     ))
-    local depends=($(pkgbuild_get_info "$subpackage" DEPENDS "" \
-      | awk '{ print "\"" $0 "\", " }'
-    ))
-    local optdepends=($(pkgbuild_get_info "$subpackage" OPTDEPENDS "" \
-        | awk '{ print "\"" $0 "\", " }'
-    ))
+
+    local repodepends=()
+    local depends=()
+    local depends_all=($(pkgbuild_get_info "$subpackage" DEPENDS ""))
+    local dependency=""
+    for dependency in "${depends_all[@]}"; do
+      if [[ " ${packages[@]} " =~ " ${dependency} " ]]; then
+        repodepends+=('"'$dependency'", ')
+      else
+          depends+=('"'$dependency'", ')
+      fi
+    done
+
+    local repooptdepends=()
+    local optdepends=()
+    while read -r dependency; do
+      if [ "$dependency" = "" ]; then
+        continue
+      fi
+      local depname=$(echo "$dependency" | cut -d":" -f1)
+      local depdesc=$(echo "$dependency" | cut -d":" -f2)
+      if [[ " ${packages[@]} " =~ " ${depname} " ]]; then
+        repooptdepends+=('"'$depname:$depdesc'", ')
+      else
+        optdepends+=('"'$depname:$depdesc'", ')
+      fi
+    done < <(pkgbuild_get_info "$subpackage" OPTDEPENDS "")
+
     local replaces=($(pkgbuild_get_info "$subpackage" REPLACES "" \
       | awk '{ print "\"" $0 "\", " }'
     ))
@@ -1154,20 +1185,35 @@ build_packages_json(){
     output="$output  {\n"
     output="$output"'    "base": "'$base'",\n'
     output="$output"'    "name": "'$name'",\n'
+    output="$output"'    "arch": "'$arch'",\n'
     output="$output"'    "description": "'$(echo "$desc" | sed 's|"|\"|g')'",\n'
     output="$output"'    "url": "'$url'",\n'
     if [ ${#license[@]} -gt 1 ]; then
       output="$output"'    "license": ['$(echo ${license[@]} | sed 's/,$//;s/""//')'],\n'
-    else
+    elif [ "$(echo "${license[@]}")" != '"",' ]; then
       output="$output"'    "license": '$(echo ${license[@]} | sed 's/,$//;s/""//')',\n'
     fi
     output="$output"'    "version": "'$version'",\n'
     output="$output"'    "release": "'$release'",\n'
     output="$output"'    "builddate": "'$(date -d@$builtseconds -u +%Y-%m-%dT%T)'",\n'
-    output="$output"'    "depends": ['$(echo ${depends[@]} | sed 's/,$//;s/""//')'],\n'
-    output="$output"'    "optdepends": ['$(echo ${optdepends[@]} | sed 's/,$//;s/""//')'],\n'
-    output="$output"'    "replaces": ['$(echo ${replaces[@]} | sed 's/,$//;s/""//')'],\n'
-    output="$output"'    "conflicts": ['$(echo ${conflicts[@]} | sed 's/,$//;s/""//')'],\n'
+    if [ ${#depends[@]} -gt 0 ]; then
+      output="$output"'    "depends": ['$(echo ${depends[@]} | sed 's/,$//')'],\n'
+    fi
+    if [ ${#repodepends[@]} -gt 0 ]; then
+      output="$output"'    "repodepends": ['$(echo ${repodepends[@]} | sed 's/,$//')'],\n'
+    fi
+    if [ ${#optdepends[@]} -gt 0 ]; then
+      output="$output"'    "optdepends": ['$(echo ${optdepends[@]} | sed 's/,$//')'],\n'
+    fi
+    if [ ${#repooptdepends[@]} -gt 0 ]; then
+      output="$output"'    "repooptdepends": ['$(echo ${repooptdepends[@]} | sed 's/,$//')'],\n'
+    fi
+    if [ "$(echo "${replaces[@]}")" != '"",' ]; then
+      output="$output"'    "replaces": ['$(echo ${replaces[@]} | sed 's/,$//;s/""//')'],\n'
+    fi
+    if [ "$(echo "${conflicts[@]}")" != '"",' ]; then
+      output="$output"'    "conflicts": ['$(echo ${conflicts[@]} | sed 's/,$//;s/""//')'],\n'
+    fi
     output="$output"'    "csize": '$csize',\n'
     output="$output"'    "isize": '$isize'\n'
     #output="$output"'    "files": ['$(echo ${files[@]} | join_by join_by ", ")']\n'
@@ -1419,6 +1465,9 @@ case $1 in
     ;;
   'addpkgs' )
     add_packages
+    exit
+    ;;
+  'sync' )
     sync_repo
     exit
     ;;
@@ -1475,7 +1524,8 @@ case $1 in
     echo -e "  ${g}build${d}       Build outdated or missing packages and sync to server."
     echo -e "  ${g}buildpkg${d}    Build a single package without syncing."
     echo -e "              Params: <package-name>"
-    echo -e "  ${g}addpkgs${d}     Generate repo databases and upload sync to server."
+    echo -e "  ${g}addpkgs${d}     Generate repo databases with current packages."
+    echo -e "  ${g}sync${d}        Sync current packages to online repositories."
     echo -e "  ${g}pkgnames${d}    Get a package names list."
     echo -e "              Params: <package-name>"
     echo -e "  ${g}pkgver${d}      Get package latest version."
