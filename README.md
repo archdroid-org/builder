@@ -33,6 +33,8 @@ execute it and it will ask you some questions like:
 * reponame (as used on the /etc/pacman.conf entry eg: [archlinuxdroid]),
 * git repository where PKGBUILD recipes reside eg:
   https://github.com/myuser/mypkgbuilds
+* enable package.json generation which is useful to generate a nice list
+  of the repo available packages from another website you may have.
 
 Then it will offer you three different methods of uploading the built
 packages for public access:
@@ -180,7 +182,8 @@ Available Commands:
   build       Build outdated or missing packages and sync to server.
   buildpkg    Build a single package without syncing.
               Params: <package-name>
-  addpkgs     Generate repo databases and upload sync to server.
+  addpkgs     Generate repo databases with current packages.
+  sync        Sync current packages to online repositories.
   pkgnames    Get a package names list.
               Params: <package-name>
   pkgver      Get package latest version.
