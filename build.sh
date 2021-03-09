@@ -77,6 +77,18 @@ setup_repo(){
 
     echo "Package build scripts cloned!"
 
+    echo -n "Enable packages.json generation after each build? [y/N]: "
+    read packages_json
+
+    case $answer in
+      'y' | 'Y' )
+        config_write packages_json "1"
+        ;;
+      * )
+        config_write packages_json "0"
+        ::
+    esac
+
     echo "Select the kind of repository where packages are going "
     echo -n "to be uploaded: (g)it, (r)github release, (w)ebserver or (a)ll [g/r/w/A]: "
 
@@ -1101,15 +1113,28 @@ build_packages_json(){
       rm -rf "cache_files"
     fi
     mkdir cache_files
-    tar -xvzf "$ARCH/$REPONAME.files" -C cache_files > /dev/null
+    tar -xzf "$ARCH/$REPONAME.files" -C cache_files > /dev/null
   fi
+
+  declare -A providers
 
   local packages=()
   local package=""
   for package in $(ls cache_files); do
     local version=$(pkgbuild_get_info "$package" VERSION "")
-    packages+=($(echo "$package" | sed "s|-$version||"))
-    local packages+=($(pkgbuild_get_info "$package" PROVIDES ""))
+    local package_name=$(echo "$package" | sed "s|-$version||")
+    packages+=("$package_name")
+
+    local line=""
+    while read -r line; do
+      if [ "$line" = "" ]; then
+        continue
+      fi
+      if ! pacman -Si "$line" > /dev/null 2>&1 ; then
+        line=$(echo $line | cut -d"=" -f1)
+        providers[$(echo $line)]+="\"$package_name\", "
+      fi
+    done < <(pkgbuild_get_info "$package" PROVIDES "")
   done
 
   local output="[\n"
@@ -1139,6 +1164,8 @@ build_packages_json(){
         | awk '{ print "\"" $0 "\", " }'
     ))
 
+    local providedepends=""
+
     local repodepends=()
     local depends=()
     local depends_all=($(pkgbuild_get_info "$subpackage" DEPENDS ""))
@@ -1146,6 +1173,9 @@ build_packages_json(){
     for dependency in "${depends_all[@]}"; do
       if [[ " ${packages[@]} " =~ " ${dependency} " ]]; then
         repodepends+=('"'$dependency'", ')
+      elif [ "${providers[$(echo $dependency)]}" != "" ]; then
+        local provider_list=$(echo "${providers[$(echo $dependency)]}" | sed "s/, $//")
+        providedepends+="\"$dependency\": [$provider_list], "
       else
           depends+=('"'$dependency'", ')
       fi
@@ -1161,6 +1191,10 @@ build_packages_json(){
       local depdesc=$(echo "$dependency" | cut -d":" -f2)
       if [[ " ${packages[@]} " =~ " ${depname} " ]]; then
         repooptdepends+=('"'$depname:$depdesc'", ')
+      #elif [ "${providers[$(echo $dependency)]}" != "" ]; then
+        #local provider_list=$(echo "${providers[$(echo $dependency)]}" | sed "s/,$//")
+        #echo $provider_list
+        #providedepends+="\"$dependency\": [$provider_list], "
       else
         optdepends+=('"'$depname:$depdesc'", ')
       fi
@@ -1201,6 +1235,9 @@ build_packages_json(){
     fi
     if [ ${#repodepends[@]} -gt 0 ]; then
       output="$output"'    "repodepends": ['$(echo ${repodepends[@]} | sed 's/,$//')'],\n'
+    fi
+    if [ "$providedepends" != "" ]; then
+      output="$output"'    "providedepends": {'$(echo "$providedepends" | sed 's/, $//')'},\n'
     fi
     if [ ${#optdepends[@]} -gt 0 ]; then
       output="$output"'    "optdepends": ['$(echo ${optdepends[@]} | sed 's/,$//')'],\n'
@@ -1355,8 +1392,12 @@ build_packages(){
     if [ ${#PACKAGES_BUILT[@]} -gt 0 ]; then
       echo "Updating packages database..."
       add_packages
-      echo "Generating packages.json..."
-      build_packages_json > "$ARCH/packages.json"
+
+      if [ "$(config_get packages_json)" = "1" ]; then
+        echo "Generating packages.json..."
+        build_packages_json > "$ARCH/packages.json"
+      fi
+
       echo "Syncing repositories..."
       sync_repo
     fi
