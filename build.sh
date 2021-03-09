@@ -60,6 +60,14 @@ config_get(){
   echo ""
 }
 
+call_hook(){
+  local hook=$(config_get "$1")
+  if [ "$hook" != "" ]; then
+    shift
+    sh -c "$hook $@"
+  fi
+}
+
 setup_repo(){
   echo "Please enter the repository name that will be used on pacman.conf."
   echo -n "Name: "
@@ -431,6 +439,8 @@ sync_repo(){
   fi
 
   sync_repo_gh_release
+
+  call_hook after_sync_hook
 }
 
 sync_repo_gh_release(){
