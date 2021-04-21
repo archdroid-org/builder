@@ -1230,7 +1230,7 @@ build_packages_json(){
     output="$output"'    "base": "'$base'",\n'
     output="$output"'    "name": "'$name'",\n'
     output="$output"'    "arch": "'$arch'",\n'
-    output="$output"'    "description": "'$(echo "$desc" | sed 's|"|\"|g')'",\n'
+    output="$output"'    "description": "'$(echo "$desc" | sed 's|"|\\"|g')'",\n'
     output="$output"'    "url": "'$url'",\n'
     if [ ${#license[@]} -gt 1 ]; then
       output="$output"'    "license": ['$(echo ${license[@]} | sed 's/,$//;s/""//')'],\n'
