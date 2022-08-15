@@ -34,6 +34,11 @@ if ! ping -c1 8.8.8.8 > /dev/null 2>&1 ; then
   exit 1
 fi
 
+log_error(){
+  echo "$1"
+  echo "[$(date)]: $1" >> "${CURRENT_DIR}/errors.log"
+}
+
 # Store option in config.ini
 # @param config_name
 # @param config_value
@@ -464,11 +469,11 @@ sync_repo_gh_release(){
   local error=$(printf "%s" "$json_output" | jq -r ".message" 2>/dev/null)
 
   if [ "$error" != "null" ] && [ "$?" != "0" ]; then
-    echo "Error: $error"
+    log_error "Error: $error"
     return
   elif [ "$error" = "Bad credentials" ] || [ "$error" != "Not Found" ]; then
     if [ "$error" != "null" ]; then
-      echo "Error: $error"
+      log_error "Error: $error"
       return
     fi
   elif [ "$error" = "Not Found" ]; then
@@ -484,8 +489,8 @@ sync_repo_gh_release(){
     error=$(printf "%s" "$json_output" | jq -r ".message" 2>/dev/null)
 
     if [ "$error" != "null" ] && [ "$?" != "0" ]; then
-      echo "Error: release could not be created with error:"
-      echo "$error"
+      log_error "Error: release could not be created with error:"
+      log_error "$error"
       return
     fi
   fi
@@ -857,12 +862,24 @@ pkgbuild_get_version(){
   return 1
 }
 
+pkgbuild_clean_current(){
+  for file in $(git status -unormal --ignored=matching . | \
+    grep -P "\t" | \
+    grep -v -P "(build.log|current_packages|PKGBUILD|modified:)" | \
+    sed "s/\t//g" \
+  ); do
+    if [ ! -d "$file" ]; then
+      rm "$file"
+    fi
+  done
+}
+
 pkgbuild_build_if_needed(){
   local ARCH=$(uname -m)
 
   # Remove package directory if PKGBUILD doesn't exists
   if [ ! -e "packages/$1/PKGBUILD" ]; then
-    echo "Package not found."
+    log_error "Package '$1' not found."
     return 3
   fi
 
@@ -878,7 +895,9 @@ pkgbuild_build_if_needed(){
 
     pkgbuild_build_dependencies $1 > build.log 2>&1 3>&1
 
-    makepkg -s --rmdeps --noprogressbar --noconfirm --clean --cleanbuild >> build.log 2>&1 3>&1
+    makepkg -s --rmdeps --noprogressbar --noconfirm --clean --cleanbuild \
+      >> build.log 2>&1 3>&1
+
     make_status=$?
     if [ $make_status -eq 0 ]; then
       if [ -e "current_packages" ]; then
@@ -900,8 +919,10 @@ pkgbuild_build_if_needed(){
 
       cp *.pkg.tar.* ../../"$ARCH"/
       rm *.pkg.tar.*
+
+      pkgbuild_clean_current
     else
-      echo "Error: could not build, see packages/$1/build.log for details"
+      log_error "Error: could not build, see packages/$1/build.log for details"
     fi
 
     cd ../../
@@ -1111,6 +1132,23 @@ pkgbuild_get_info(){
   return 1
 }
 
+pkgbuild_requeue(){
+  if [ ! -e "packages/$1" ]; then
+    echo "The package '$1' does not exists."
+    return 1
+  fi
+
+  if [ -e requeue ]; then
+    if grep -q "$1" requeue ; then
+      echo "The package '$1' is already on queue."
+      return 1
+    fi
+  fi
+
+  echo "$1" >> requeue
+  echo "Added '$1' to requeue"
+}
+
 build_packages_json(){
   local ARCH=$(uname -m)
   local REPONAME=$(config_get reponame)
@@ -1295,7 +1333,7 @@ build_packages(){
   cd packages
   if ! git checkout master >/dev/null 2>&1 ; then
     if ! git checkout main >/dev/null 2>&1 ; then
-      echo "No master or main branch found on the packages repo."
+      log_error "No master or main branch found on the packages repo."
       cd ..
       exit 1
     fi
@@ -1359,13 +1397,28 @@ build_packages(){
   # unset temp_packages
   unset temp_packages
 
+  # add packages on requeue
+  if [ -e "requeue" ]; then
+    local package=""
+    for package in $(cat requeue) ; do
+      if [ -e "packages/$package/PKGBUILD" ]; then
+        packages+=($package)
+      fi
+    done
+    rm requeue
+  fi
+
   if [ ${#packages[@]} -lt 1 ]; then
     echo "No package needs building."
   else
+    # Remove old downloaded packages
+    yes | sudo pacman -Scc
+
+    # Upgrade the system
     sudo pacman -Suy --noconfirm
 
     if [ "$?" != "0" ]; then
-      echo "Error while upgrading system packages."
+      log_error "Error while upgrading system packages."
       exit 1
     fi
 
@@ -1489,6 +1542,11 @@ case $1 in
     config_write $@
     exit
     ;;
+  'requeue' )
+    shift
+    pkgbuild_requeue $@
+    exit
+    ;;
   'setup' )
     setup_repo
     exit
@@ -1576,6 +1634,7 @@ case $1 in
     echo -e "  ${g}buildpkg${d}    Build a single package without syncing."
     echo -e "              Params: <package-name>"
     echo -e "  ${g}addpkgs${d}     Generate repo databases with current packages."
+    echo -e "  ${g}requeue${d}     Queue a package that failed for a rebuild."
     echo -e "  ${g}sync${d}        Sync current packages to online repositories."
     echo -e "  ${g}pkgnames${d}    Get a package names list."
     echo -e "              Params: <package-name>"
